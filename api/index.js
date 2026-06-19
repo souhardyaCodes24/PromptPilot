@@ -280,14 +280,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "100kb" }));
 
-// Routes use no /api prefix — Vercel's api/index.js
-// receives paths with /api stripped
+// Mount routes at BOTH /api/* and /* to handle either Vercel behavior
+// (some versions strip /api prefix, some don't)
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
-
-// ── Analyze Route ──────────────────────────────────────────────
+const apiRouter = express.Router();
 
 const analyzeSchema = z.object({
   prompt: z.string().min(1, "EMPTY_PROMPT").max(2000, "REQUEST_TOO_LARGE"),
@@ -302,7 +298,11 @@ function getStatus(code) {
   }
 }
 
-app.post("/analyze", async (req, res) => {
+apiRouter.get("/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+apiRouter.post("/analyze", async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -322,11 +322,9 @@ app.post("/analyze", async (req, res) => {
   }
 });
 
-// ── Refine Route ───────────────────────────────────────────────
-
 const refineSchema = z.object({ prompt: z.string().min(1), answers: z.array(z.string()) });
 
-app.post("/refine", async (req, res) => {
+apiRouter.post("/refine", async (req, res) => {
   const parsed = refineSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, errorCode: "VALIDATION_ERROR", message: "Invalid request." });
   try {
@@ -341,8 +339,6 @@ app.post("/refine", async (req, res) => {
   }
 });
 
-// ── Debug Route ────────────────────────────────────────────────
-
 const TEST_CASES = {
   HEALTHY: { status: 200, body: { success: true, data: { score: 84, missingInformation: ["Target audience"], questions: [{ id: 1, type: "text", category: "Audience", question: "Who is the target audience?" }], promptBlueprint: { role: "Senior Designer", objective: "Create a portfolio", context: "The user wants a professional portfolio.", requirements: ["Clean layout"], constraints: ["Mobile-responsive"], expectedOutput: "A complete design." }, improvementReport: { added: ["Audience"], strengths: ["Clear idea"], weaknesses: ["Missing details"] }, improvedPrompt: "ROLE\n\nSenior Designer\n\nOBJECTIVE\n\nCreate a portfolio\n\nEXPECTED OUTPUT\n\nA complete design." } } },
   RATE_LIMIT: { status: 429, body: { success: false, errorCode: "RATE_LIMIT", message: "AI usage limit reached." } },
@@ -351,12 +347,16 @@ const TEST_CASES = {
   MODEL_UNAVAILABLE: { status: 503, body: { success: false, errorCode: "MODEL_UNAVAILABLE", message: "The analysis engine is temporarily unavailable." } },
 };
 
-app.post("/debug/test", async (req, res) => {
+apiRouter.post("/debug/test", async (req, res) => {
   const config = TEST_CASES[req.body?.testCase];
   if (!config) return res.status(400).json({ success: false, errorCode: "INVALID_TEST_CASE", message: `Unknown test case. Valid: ${Object.keys(TEST_CASES).join(", ")}` });
   if (config.delay) await new Promise((r) => setTimeout(r, config.delay));
   res.status(config.status).json(config.body);
 });
+
+// Mount at both /api and / for Vercel compatibility
+app.use("/api", apiRouter);
+app.use(apiRouter);
 
 // ── Error Handlers ─────────────────────────────────────────────
 
