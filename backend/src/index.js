@@ -8,11 +8,23 @@ const debugRouter = require("./routes/debug");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "https://promptpilot.vercel.app",
+  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(",") : []),
+];
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    cb(null, true);
+  },
+}));
 app.use(express.json({ limit: "100kb" }));
 
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", service: "PromptPilot Backend", timestamp: new Date().toISOString() });
 });
 
 app.use("/api/analyze", analyzeRouter);

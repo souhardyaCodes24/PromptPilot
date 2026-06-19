@@ -1,4 +1,5 @@
 const API_URL = import.meta.env.VITE_API_URL || "/api";
+const BACKEND_URL = API_URL.replace(/\/api\/?$/, "") || "";
 
 export class ApiError extends Error {
   errorCode: string;
@@ -8,6 +9,17 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.errorCode = errorCode;
     this.status = status;
+  }
+}
+
+export async function checkHealth(timeoutMs = 5000): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -41,25 +53,9 @@ export async function analyzePrompt(prompt: string, testCase?: string) {
   return request<{
     score: number;
     missingInformation: string[];
-    questions: {
-      id: number;
-      type: string;
-      category: string;
-      question: string;
-    }[];
-    promptBlueprint: {
-      role: string;
-      objective: string;
-      context: string;
-      requirements: string[];
-      constraints: string[];
-      expectedOutput: string;
-    };
-    improvementReport: {
-      added: string[];
-      strengths: string[];
-      weaknesses: string[];
-    };
+    questions: { id: number; type: string; category: string; question: string }[];
+    promptBlueprint: { role: string; objective: string; context: string; requirements: string[]; constraints: string[]; expectedOutput: string };
+    improvementReport: { added: string[]; strengths: string[]; weaknesses: string[] };
     improvedPrompt: string;
   }>(path, body);
 }

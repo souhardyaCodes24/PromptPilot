@@ -1,8 +1,7 @@
 {
   "private": true,
-  "dependencies": {
-    "express": "^5.2.1",
-    "cors": "^2.8.6",
-    "zod": "^4.4.3"
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build"
   }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Toaster } from "react-hot-toast";
 import { Header } from "./components/Header";
@@ -6,17 +6,20 @@ import { PromptInput } from "./components/PromptInput";
 import { AnalysisResult } from "./components/AnalysisResult";
 import { InterviewFlow } from "./components/InterviewFlow";
 import { LoadingOverlay } from "./components/LoadingOverlay";
+import { ConnectionLoader } from "./components/ConnectionLoader";
 import ShinyText from "./components/ShinyText";
 import LightRays from "./components/LightRays";
 import { ScrollCueArrow } from "./components/ScrollCueArrow";
 import { HomeStoryboard } from "./components/HomeStoryboard";
 import { useTheme } from "./hooks/useTheme";
-import { analyzePrompt, refinePrompt, ApiError } from "./lib/api";
+import { analyzePrompt, refinePrompt, checkHealth, ApiError } from "./lib/api";
 import { getErrorInfo, getSuccessInfo } from "./lib/errors";
 import { showErrorToast, showWarningToast, showSuccessToast } from "./lib/toast";
 import { HistoryDrawer } from "./components/HistoryDrawer";
 import { useHistory, generateHistoryItem } from "./hooks/useHistory";
 import type { AnalysisResult as AnalysisResultType, AppView, QAPair, InterviewQuestion } from "./types";
+
+type PendingAction = "analyze" | "interview";
 
 function App() {
   const { isDark, toggle } = useTheme();
@@ -28,7 +31,10 @@ function App() {
   const [interviewAnswers, setInterviewAnswers] = useState<string[]>([]);
   const [qaPairs, setQaPairs] = useState<QAPair[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const pendingAction = useRef<PendingAction | null>(null);
+  const pendingPrompt = useRef("");
   const history = useHistory();
 
   useEffect(() => {
@@ -67,14 +73,7 @@ function App() {
     }
   }, [testCase, handleApiError, history]);
 
-  const handleAnalyze = (prompt: string) => {
-    setInterviewQuestions([]);
-    setInterviewAnswers([]);
-    setQaPairs([]);
-    doAnalyze(prompt);
-  };
-
-  const handleTryInterview = async (prompt: string) => {
+  const doInterview = useCallback(async (prompt: string) => {
     setUserPrompt(prompt);
     setResult(null);
     setInterviewQuestions([]);
@@ -91,6 +90,46 @@ function App() {
     } finally {
       setProcessing(false);
     }
+  }, [testCase, handleApiError]);
+
+  const ensureConnection = useCallback(async (prompt: string, action: PendingAction) => {
+    if (testCase) {
+      if (action === "analyze") doAnalyze(prompt);
+      else doInterview(prompt);
+      return;
+    }
+
+    const ok = await checkHealth(3000);
+    if (ok) {
+      if (action === "analyze") doAnalyze(prompt);
+      else doInterview(prompt);
+      return;
+    }
+
+    pendingPrompt.current = prompt;
+    pendingAction.current = action;
+    setConnecting(true);
+  }, [testCase, doAnalyze, doInterview]);
+
+  const handleConnectReady = useCallback(() => {
+    setConnecting(false);
+    const prompt = pendingPrompt.current;
+    const action = pendingAction.current;
+    pendingPrompt.current = "";
+    pendingAction.current = null;
+    if (action === "analyze") doAnalyze(prompt);
+    else if (action === "interview") doInterview(prompt);
+  }, [doAnalyze, doInterview]);
+
+  const handleAnalyze = (prompt: string) => {
+    setInterviewQuestions([]);
+    setInterviewAnswers([]);
+    setQaPairs([]);
+    ensureConnection(prompt, "analyze");
+  };
+
+  const handleTryInterview = (prompt: string) => {
+    ensureConnection(prompt, "interview");
   };
 
   const handleInterviewComplete = async (answers: string[]) => {
@@ -196,6 +235,8 @@ function App() {
 
       <LoadingOverlay active={processing} />
 
+      {connecting && <ConnectionLoader onReady={handleConnectReady} />}
+
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-12">
         <AnimatePresence mode="wait">
           {view === "input" && (
@@ -206,7 +247,6 @@ function App() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.3 }}
             >
-              {/* Section 1: Hero */}
               <section className="space-y-8">
                 <div className="relative min-h-[320px] flex flex-col items-center justify-center overflow-hidden">
                   <div className="absolute inset-0 w-full h-full">
@@ -249,13 +289,12 @@ function App() {
                 <PromptInput
                   onSubmit={handleAnalyze}
                   onInterview={handleTryInterview}
-                  disabled={processing}
+                  disabled={processing || connecting}
                 />
 
                 <ScrollCueArrow />
               </section>
 
-              {/* Sections 2-4: Storyboard */}
               <HomeStoryboard />
             </motion.div>
           )}

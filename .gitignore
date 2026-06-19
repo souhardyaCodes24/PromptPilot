@@ -25,6 +25,9 @@ dist-ssr/
 backend/.env
 frontend/.env
 
+# Vercel
+.vercel
+
 # OS
 .DS_Store
 Thumbs.db
