@@ -44,6 +44,10 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`PromptPilot backend running on port ${PORT}`);
-});
+if (process.env.VERCEL !== "1") {
+  app.listen(PORT, () => {
+    console.log(`PromptPilot backend running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
