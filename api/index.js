@@ -280,7 +280,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "100kb" }));
 
-app.get("/api/health", (_req, res) => {
+// Routes use no /api prefix — Vercel's api/index.js
+// receives paths with /api stripped
+
+app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
@@ -299,7 +302,7 @@ function getStatus(code) {
   }
 }
 
-app.post("/api/analyze", async (req, res) => {
+app.post("/analyze", async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -323,7 +326,7 @@ app.post("/api/analyze", async (req, res) => {
 
 const refineSchema = z.object({ prompt: z.string().min(1), answers: z.array(z.string()) });
 
-app.post("/api/refine", async (req, res) => {
+app.post("/refine", async (req, res) => {
   const parsed = refineSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, errorCode: "VALIDATION_ERROR", message: "Invalid request." });
   try {
@@ -348,7 +351,7 @@ const TEST_CASES = {
   MODEL_UNAVAILABLE: { status: 503, body: { success: false, errorCode: "MODEL_UNAVAILABLE", message: "The analysis engine is temporarily unavailable." } },
 };
 
-app.post("/api/debug/test", async (req, res) => {
+app.post("/debug/test", async (req, res) => {
   const config = TEST_CASES[req.body?.testCase];
   if (!config) return res.status(400).json({ success: false, errorCode: "INVALID_TEST_CASE", message: `Unknown test case. Valid: ${Object.keys(TEST_CASES).join(", ")}` });
   if (config.delay) await new Promise((r) => setTimeout(r, config.delay));
