@@ -1,15 +1,44 @@
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+
 const MODELS = [
-  "qwen/qwen3-32b",
   "openai/gpt-oss-120b",
-  "llama-3.3-70b-versatile"
+  "llama-3.3-70b-versatile",
+  "qwen/qwen3-32b",
 ];
+
+
+
 
 class GroqServiceError extends Error {
   constructor(message, code) {
     super(message);
     this.code = code;
   }
+}
+
+function safeJsonParse(content) {
+  try {
+    return JSON.parse(content);
+  } catch {}
+
+  try {
+    const cleaned = content
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    return JSON.parse(cleaned);
+  } catch {}
+
+  try {
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    if (start !== -1 && end !== -1) {
+      return JSON.parse(content.substring(start, end + 1));
+    }
+  } catch {}
+
+  return null;
 }
 
 function buildAnalysisMessages(prompt) {
@@ -24,7 +53,7 @@ You do NOT rewrite prompts.
 
 You architect prompts.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON matching this schema:
 
 {
   "score": number,
@@ -44,8 +73,7 @@ Return ONLY valid JSON.
     "added": string[],
     "strengths": string[],
     "weaknesses": string[]
-  },
-  "improvedPrompt": string
+  }
 }
 
 SCORING RULES:
@@ -73,7 +101,17 @@ IMPROVED PROMPT RULES:
 - Never generate a short paragraph.
 - Never summarize.
 - Expand missing context intelligently.
-- Optimize for: ChatGPT, Gemini, Grok, Perplexity, Claude`,
+- Optimize for: ChatGPT, Gemini, Grok, Perplexity, Claude
+
+CRITICAL RESPONSE RULES:
+Do NOT wrap JSON in markdown.
+Do NOT use \`\`\`json.
+Do NOT explain your answer.
+Do NOT add any text before the JSON.
+Do NOT add any text after the JSON.
+The first character of your response must be {.
+The last character of your response must be }.
+Return a single JSON object only.`,
     },
     {
       role: "user",
@@ -94,7 +132,7 @@ function buildRefineMessages(prompt, answers) {
 
 Combine the original prompt and all user answers into a single professional prompt specification.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON matching this schema:
 
 {
   "finalPrompt": string
@@ -109,7 +147,17 @@ RULES FOR finalPrompt:
 - The result should be suitable for: ChatGPT, Gemini, Grok, Perplexity, Claude
 - The prompt should typically be 250-600 words.
 - Never generate a short paragraph.
-- Return only JSON.`,
+- Return only JSON.
+
+CRITICAL RESPONSE RULES:
+Do NOT wrap JSON in markdown.
+Do NOT use \`\`\`json.
+Do NOT explain your answer.
+Do NOT add any text before the JSON.
+Do NOT add any text after the JSON.
+The first character of your response must be {.
+The last character of your response must be }.
+Return a single JSON object only.`,
     },
     {
       role: "user",
@@ -127,19 +175,25 @@ function getApiKey() {
 }
 
 async function tryModel(model, messages, apiKey) {
-  const response = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.3,
-      max_tokens: 2048,
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.3,
+        max_tokens: 2048,
+        response_format: { type: "json_object" },
+      }),
+    });
+  } catch (err) {
+    return { error: `fetch_failed: ${err.message}` };
+  }
 
   if (response.status === 429) {
     throw new GroqServiceError("AI usage limit reached.", "RATE_LIMIT");
@@ -162,7 +216,7 @@ async function tryModel(model, messages, apiKey) {
     return { error: "empty_response" };
   }
 
-  return { content, raw: data };
+  return { content };
 }
 
 async function groqRequest(messages) {
@@ -170,19 +224,19 @@ async function groqRequest(messages) {
   let lastError = null;
 
   for (const model of MODELS) {
-    console.log(`Trying model: ${model}`);
-
     const result = await tryModel(model, messages, apiKey);
 
     if (result.content) {
-      try {
-        const parsed = JSON.parse(result.content);
+      const parsed = safeJsonParse(result.content);
+      if (parsed) {
+        if (process.env.NODE_ENV !== "production") {
+          console.log(`[${model}] JSON accepted`);
+        }
         return parsed;
-      } catch {
-        console.warn(`Model ${model} returned invalid JSON, trying fallback...`);
-        lastError = new GroqServiceError("The AI returned an invalid response.", "INVALID_AI_RESPONSE");
-        continue;
       }
+      console.warn(`[${model}] invalid JSON, trying fallback...`);
+      lastError = new GroqServiceError("The AI returned an invalid response.", "INVALID_AI_RESPONSE");
+      continue;
     }
 
     lastError = result.error;
@@ -193,12 +247,12 @@ async function groqRequest(messages) {
       result.error?.includes("model_not_found") ||
       result.error?.includes("not supported")
     ) {
-      console.warn(`Model ${model} unavailable, trying fallback...`);
+      console.warn(`[${model}] unavailable, trying fallback...`);
       continue;
     }
 
     if (result.error) {
-      console.warn(`Model ${model} error: ${result.error}`);
+      console.warn(`[${model}] error: ${result.error}`);
     }
   }
 
@@ -267,7 +321,6 @@ async function analyzePrompt(prompt) {
   const result = await groqRequest(buildAnalysisMessages(prompt));
 
   const bp = result.promptBlueprint || fallbackBlueprint(prompt);
-  const rawImproved = result.improvedPrompt;
 
   return {
     score: result.score ?? 50,
@@ -275,10 +328,7 @@ async function analyzePrompt(prompt) {
     questions: normalizeQuestions(result.questions),
     promptBlueprint: bp,
     improvementReport: normalizeImprovementReport(result.improvementReport),
-    improvedPrompt:
-      typeof rawImproved === "string" && rawImproved.length > 20
-        ? rawImproved
-        : formatBlueprint(bp),
+    improvedPrompt: formatBlueprint(bp),
   };
 }
 
